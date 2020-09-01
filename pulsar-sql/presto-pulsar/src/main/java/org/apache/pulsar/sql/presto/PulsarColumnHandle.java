@@ -21,18 +21,16 @@ package org.apache.pulsar.sql.presto;
 import static java.util.Objects.requireNonNull;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.prestosql.spi.connector.ColumnHandle;
+import io.prestosql.decoder.DecoderColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.type.Type;
-import java.util.Arrays;
 import java.util.Objects;
 
 /**
  * This class represents the basic information about a presto column.
  */
-public class PulsarColumnHandle implements ColumnHandle {
+public class PulsarColumnHandle implements DecoderColumnHandle {
 
     private final String connectorId;
 
@@ -56,17 +54,21 @@ public class PulsarColumnHandle implements ColumnHandle {
      */
     private final boolean internal;
 
-    private final String[] fieldNames;
-
-    private final Integer[] positionIndices;
 
     private HandleKeyValueType handleKeyValueType;
+
+    private String mapping;
+
+    private String dataFormat;
+
+    private String formatHint;
 
     /**
      * Column Handle keyValue type, used for keyValue schema.
      */
     public enum HandleKeyValueType {
         /**
+         *
          * The handle not for keyValue schema.
          */
         NONE,
@@ -87,16 +89,18 @@ public class PulsarColumnHandle implements ColumnHandle {
             @JsonProperty("type") Type type,
             @JsonProperty("hidden") boolean hidden,
             @JsonProperty("internal") boolean internal,
-            @JsonProperty("fieldNames") String[] fieldNames,
-            @JsonProperty("positionIndices") Integer[] positionIndices,
+            @JsonProperty("mapping") String mapping,
+            @JsonProperty("dataFormat") String dataFormat,
+            @JsonProperty("formatHint") String formatHint,
             @JsonProperty("handleKeyValueType") HandleKeyValueType handleKeyValueType) {
         this.connectorId = requireNonNull(connectorId, "connectorId is null");
         this.name = requireNonNull(name, "name is null");
         this.type = requireNonNull(type, "type is null");
         this.hidden = hidden;
         this.internal = internal;
-        this.fieldNames = fieldNames;
-        this.positionIndices = positionIndices;
+        this.mapping=mapping;
+        this.dataFormat=dataFormat;
+        this.formatHint=formatHint;
         if (handleKeyValueType == null) {
             this.handleKeyValueType = HandleKeyValueType.NONE;
         } else {
@@ -114,6 +118,16 @@ public class PulsarColumnHandle implements ColumnHandle {
         return name;
     }
 
+    @Override
+    public String getMapping() {
+        return mapping;
+    }
+
+    @Override
+    public String getDataFormat() {
+        return dataFormat;
+    }
+
     @JsonProperty
     public Type getType() {
         return type;
@@ -129,30 +143,17 @@ public class PulsarColumnHandle implements ColumnHandle {
         return internal;
     }
 
-    @JsonProperty
-    public String[] getFieldNames() {
-        return fieldNames;
+    @Override
+    public String getFormatHint() {
+        return formatHint;
     }
 
-    @JsonProperty
-    public Integer[] getPositionIndices() {
-        return positionIndices;
-    }
 
     @JsonProperty
     public HandleKeyValueType getHandleKeyValueType() {
         return handleKeyValueType;
     }
 
-    @JsonIgnore
-    public boolean isKey() {
-        return Objects.equals(handleKeyValueType, HandleKeyValueType.KEY);
-    }
-
-    @JsonIgnore
-    public boolean isValue() {
-        return Objects.equals(handleKeyValueType, HandleKeyValueType.VALUE);
-    }
 
     ColumnMetadata getColumnMetadata() {
         return new ColumnMetadata(name, type, null, hidden);
@@ -184,12 +185,17 @@ public class PulsarColumnHandle implements ColumnHandle {
         if (type != null ? !type.equals(that.type) : that.type != null) {
             return false;
         }
-        if (!Arrays.deepEquals(fieldNames, that.fieldNames)) {
+        if (mapping != null ? !mapping.equals(that.mapping) : that.mapping != null) {
             return false;
         }
-        if (!Arrays.deepEquals(positionIndices, that.positionIndices)) {
+        if (dataFormat != null ? !dataFormat.equals(that.dataFormat) : that.dataFormat != null) {
             return false;
         }
+
+        if (formatHint != null ? !formatHint.equals(that.formatHint) : that.formatHint != null) {
+            return false;
+        }
+
         return Objects.equals(handleKeyValueType, that.handleKeyValueType);
     }
 
@@ -200,8 +206,9 @@ public class PulsarColumnHandle implements ColumnHandle {
         result = 31 * result + (type != null ? type.hashCode() : 0);
         result = 31 * result + (hidden ? 1 : 0);
         result = 31 * result + (internal ? 1 : 0);
-        result = 31 * result + Arrays.hashCode(fieldNames);
-        result = 31 * result + Arrays.hashCode(positionIndices);
+        result =  31 * result + (mapping != null ? mapping.hashCode() : 0);
+        result = 31 * result + (dataFormat != null ? dataFormat.hashCode() : 0);
+        result = 31 * result + (formatHint != null ? formatHint.hashCode() : 0);
         result = 31 * result + (handleKeyValueType != null ? handleKeyValueType.hashCode() : 0);
         return result;
     }
@@ -214,8 +221,9 @@ public class PulsarColumnHandle implements ColumnHandle {
             + ", type=" + type
             + ", hidden=" + hidden
             + ", internal=" + internal
-            + ", fieldNames=" + Arrays.toString(fieldNames)
-            + ", positionIndices=" + Arrays.toString(positionIndices)
+            + ", mapping=" + mapping
+            + ", dataFormat=" + dataFormat
+            + ", formatHint=" + formatHint
             + ", handleKeyValueType=" + handleKeyValueType
             + '}';
     }
