@@ -24,7 +24,6 @@ import com.google.protobuf.Descriptors;
 import com.google.protobuf.GeneratedMessageV3;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
-import org.apache.avro.protobuf.ProtobufData;
 import org.apache.pulsar.client.api.schema.SchemaDefinition;
 import org.apache.pulsar.client.api.schema.SchemaReader;
 import org.apache.pulsar.client.impl.schema.reader.ProtobufReader;
@@ -34,6 +33,7 @@ import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -45,9 +45,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 /**
  * A schema implementation to deal with protobuf generated messages.
  */
-public class ProtobufSchema<T extends com.google.protobuf.GeneratedMessageV3> extends StructSchema<T> {
+public class ProtobufSchema<T extends GeneratedMessageV3> extends StructSchema<T> {
 
     public static final String PARSING_INFO_PROPERTY = "__PARSING_INFO__";
+
+    private Descriptors.Descriptor schema;
 
     @Getter
     @AllArgsConstructor
@@ -60,8 +62,15 @@ public class ProtobufSchema<T extends com.google.protobuf.GeneratedMessageV3> ex
         private final Map <String, Object> definition;
     }
 
-    private static <T> org.apache.avro.Schema createProtobufAvroSchema(Class<T> pojo) {
-        return ProtobufData.get().getSchema(pojo);
+
+    private static <T> Descriptors.Descriptor createProtobufSchema(Class<T> pojo) {
+        try {
+            Method method = pojo.getMethod("getDescriptor");
+            Descriptors.Descriptor  descriptor = (Descriptors.Descriptor) method.invoke(null);
+            return descriptor;
+        } catch (IllegalAccessException| InvocationTargetException|NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private ProtobufSchema(SchemaInfo schemaInfo, T protoMessageInstance) {
@@ -94,12 +103,17 @@ public class ProtobufSchema<T extends com.google.protobuf.GeneratedMessageV3> ex
         }
     }
 
+
+    public Descriptors.Descriptor getProtobufSchema() {
+        return schema;
+    }
+
     @Override
     protected SchemaReader<T> loadReader(BytesSchemaVersion schemaVersion) {
         throw new RuntimeException("ProtobufSchema don't support schema versioning");
     }
 
-    public static <T extends com.google.protobuf.GeneratedMessageV3> ProtobufSchema<T> of(Class<T> pojo) {
+    public static <T extends GeneratedMessageV3> ProtobufSchema<T> of(Class<T> pojo) {
         return of(pojo, new HashMap<>());
     }
 
@@ -111,18 +125,18 @@ public class ProtobufSchema<T extends com.google.protobuf.GeneratedMessageV3> ex
     public static <T> ProtobufSchema of(SchemaDefinition<T> schemaDefinition) {
         Class<T> pojo = schemaDefinition.getPojo();
 
-        if (!com.google.protobuf.GeneratedMessageV3.class.isAssignableFrom(pojo)) {
-            throw new IllegalArgumentException(com.google.protobuf.GeneratedMessageV3.class.getName()
+        if (!GeneratedMessageV3.class.isAssignableFrom(pojo)) {
+            throw new IllegalArgumentException(GeneratedMessageV3.class.getName()
                     + " is not assignable from " + pojo.getName());
         }
+        Descriptors.Descriptor descriptor = createProtobufSchema(schemaDefinition.getPojo());
 
-            SchemaInfo schemaInfo = SchemaInfo.builder()
-                    .schema(createProtobufAvroSchema(schemaDefinition.getPojo()).toString().getBytes(UTF_8))
+        SchemaInfo schemaInfo = SchemaInfo.builder()
+                    .schema(SchemaUtils.ProtobufSchemaSerializer.serialize(descriptor).getBytes(UTF_8))
                     .type(SchemaType.PROTOBUF)
                     .name("")
                     .properties(schemaDefinition.getProperties())
                     .build();
-
         try {
             return new ProtobufSchema(schemaInfo,
                 (GeneratedMessageV3) pojo.getMethod("getDefaultInstance").invoke(null));
@@ -131,7 +145,7 @@ public class ProtobufSchema<T extends com.google.protobuf.GeneratedMessageV3> ex
         }
     }
 
-    public static <T extends com.google.protobuf.GeneratedMessageV3> ProtobufSchema<T> of(
+    public static <T extends GeneratedMessageV3> ProtobufSchema<T> of(
             Class pojo, Map<String, String> properties){
         return ofGenericClass(pojo, properties);
     }

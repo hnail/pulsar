@@ -19,37 +19,29 @@
 package org.apache.pulsar.client.impl.schema;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonDeserializationContext;
-import com.google.gson.JsonDeserializer;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
-import com.google.gson.JsonPrimitive;
-import com.google.gson.JsonSerializationContext;
-import com.google.gson.JsonSerializer;
+import com.google.gson.*;
+import com.google.protobuf.DescriptorProtos;
+import com.google.protobuf.Descriptors;
+import com.google.protobuf.InvalidProtocolBufferException;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufUtil;
-
-import java.io.IOException;
-import java.lang.reflect.Type;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.SortedMap;
-import java.util.TreeMap;
-
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.apache.pulsar.client.internal.DefaultImplementation;
 import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaInfoWithVersion;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+
+import java.io.IOException;
+import java.io.Serializable;
+import java.lang.reflect.Type;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -390,6 +382,95 @@ public final class SchemaUtils {
         GsonBuilder gsonBuilder = new GsonBuilder()
             .registerTypeHierarchyAdapter(Map.class, SCHEMA_PROPERTIES_DESERIALIZER);
         return gsonBuilder.create().fromJson(serializedProperties, Map.class);
+    }
+
+
+    /**
+     * ProtobufSchema jsonDef serialize/deserialize Utils
+     */
+    public static class ProtobufSchemaSerializer {
+
+        public static String serialize(Descriptors.Descriptor descriptor) {
+            ProtobufGenericSchemaDescriptor protobufGenericDescriptor = new ProtobufGenericSchemaDescriptor();
+            protobufGenericDescriptor.setEntryFileProtoName(descriptor.getFile().toProto().getName());
+            protobufGenericDescriptor.setEntryMessageName(descriptor.getName());
+            buildProtobufGenericSchemaDescriptor(descriptor.getFile(), protobufGenericDescriptor);
+            String protoSchema = new Gson().toJson(protobufGenericDescriptor);
+            return protoSchema;
+        }
+
+        private static void buildProtobufGenericSchemaDescriptor(Descriptors.FileDescriptor fileDescriptor, ProtobufGenericSchemaDescriptor protobufGenericDescriptor) {
+            ProtoFileDependency protoFileDependency = new ProtoFileDependency();
+            protoFileDependency.setFileProtoName(fileDescriptor.toProto().getName());
+            fileDescriptor.getDependencies().forEach(dependency -> {
+                if (protobufGenericDescriptor.getFileDescriptorProtos().get(dependency.getName()) == null) {
+                    protobufGenericDescriptor.getFileDescriptorProtos().put(dependency.getName(), new String(dependency.toProto().toByteArray()));
+                    buildProtobufGenericSchemaDescriptor(dependency, protobufGenericDescriptor);
+                }
+                protoFileDependency.getDependencies().add(dependency.toProto().getName());
+            });
+            protobufGenericDescriptor.getDependencyGraph().add(protoFileDependency);
+        }
+
+        public static Descriptors.Descriptor deserialize(String jsonDef) {
+
+            ProtobufGenericSchemaDescriptor SchemaDescriptor = new Gson().fromJson(jsonDef, ProtobufGenericSchemaDescriptor.class);
+            Map<String, ProtoFileDependency> dependencyGraph = new HashMap<>();
+            Map<String, DescriptorProtos.FileDescriptorProto> fileProtoCache = new HashMap<>();
+            SchemaDescriptor.getDependencyGraph().stream().forEach(dependency -> dependencyGraph.put(dependency.getFileProtoName(), dependency));
+            SchemaDescriptor.getFileDescriptorProtos().forEach((fileProtoName, fileProto) -> {
+                try {
+                    fileProtoCache.put(fileProtoName, DescriptorProtos.FileDescriptorProto.parseFrom(fileProto.getBytes(StandardCharsets.UTF_8)));
+                } catch (InvalidProtocolBufferException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            Map<String, Descriptors.FileDescriptor> fileDescriptors = new HashMap<>();
+            buildFileDescriptor(dependencyGraph.get(SchemaDescriptor.getEntryFileProtoName()), dependencyGraph, fileProtoCache, fileDescriptors);
+            return fileDescriptors.get(SchemaDescriptor.getEntryFileProtoName()).findMessageTypeByName(SchemaDescriptor.getEntryMessageName());
+        }
+
+        private static void buildFileDescriptor(ProtoFileDependency protoFileDependency, Map<String, ProtoFileDependency> dependencyGraph,
+                                                Map<String, DescriptorProtos.FileDescriptorProto> fileProtoCache, Map<String, Descriptors.FileDescriptor> fileDescriptors) {
+            DescriptorProtos.FileDescriptorProto fileDescriptorProto = fileProtoCache.get(protoFileDependency.getFileProtoName());
+            List<Descriptors.FileDescriptor> dependencyFileDescriptorList = new ArrayList<>();
+            protoFileDependency.getDependencies().forEach(dependency -> {
+                ProtoFileDependency fileProto = dependencyGraph.get(dependency);
+                Descriptors.FileDescriptor dependencyFileDescriptor;
+                if (fileDescriptors.get(fileProto.getFileProtoName()) == null) {
+                    buildFileDescriptor(fileProto, dependencyGraph, fileProtoCache, fileDescriptors);
+
+                }
+                dependencyFileDescriptor = fileDescriptors.get(fileProto.getFileProtoName());
+                dependencyFileDescriptorList.add(dependencyFileDescriptor);
+            });
+            try {
+                //TODO: allowUnknownDependencies for circular dependency ?
+                fileDescriptors.put(fileDescriptorProto.getName(), Descriptors.FileDescriptor.buildFrom(fileDescriptorProto, dependencyFileDescriptorList.toArray(new Descriptors.FileDescriptor[0]), false));
+            } catch (Descriptors.DescriptorValidationException e) {
+                throw new IllegalStateException("FileDescriptor build fail!", e);
+            }
+        }
+
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        private static class ProtoFileDependency implements Serializable {
+            private String fileProtoName;
+            private List<String> dependencies = new ArrayList<>();
+        }
+
+        @Getter
+        @Setter
+        @NoArgsConstructor
+        public static class ProtobufGenericSchemaDescriptor implements Serializable {
+            private String entryFileProtoName;
+            private String entryMessageName;
+            private Map<String, String> fileDescriptorProtos = new HashMap<>();
+            private List<ProtoFileDependency> dependencyGraph = new ArrayList<>();
+
+        }
     }
 
 }

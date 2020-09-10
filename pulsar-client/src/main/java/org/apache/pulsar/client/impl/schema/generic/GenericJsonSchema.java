@@ -18,8 +18,6 @@
  */
 package org.apache.pulsar.client.impl.schema.generic;
 
-import java.util.stream.Collectors;
-
 import lombok.extern.slf4j.Slf4j;
 import org.apache.avro.Schema;
 import org.apache.pulsar.client.api.schema.Field;
@@ -30,11 +28,13 @@ import org.apache.pulsar.client.impl.schema.SchemaUtils;
 import org.apache.pulsar.common.protocol.schema.BytesSchemaVersion;
 import org.apache.pulsar.common.schema.SchemaInfo;
 
+import java.util.stream.Collectors;
+
 /**
  * A generic json schema.
  */
 @Slf4j
-class GenericJsonSchema extends GenericSchemaImpl {
+public class GenericJsonSchema extends AbstractAvroBasedGenericSchema {
 
     public GenericJsonSchema(SchemaInfo schemaInfo) {
         this(schemaInfo, true);
